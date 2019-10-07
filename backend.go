@@ -163,6 +163,7 @@ type RawBounds struct {
 	ChunkIdx    int
 	OffsetStart int
 	OffsetEnd   int
+	GlobalPos   int
 }
 
 func (backend *Backend) getHdrLen() int {
@@ -193,19 +194,26 @@ func (backend *Backend) GetRawBounds(trueLen, rangeStart, rangeEnd int) []RawBou
 		ret = append(ret, RawBounds{ChunkIdx: firstBlock,
 			OffsetStart: trueRangeStart,
 			OffsetEnd:   trueRangeEnd,
+			GlobalPos:   0,
 		})
 	} else {
+		cpos := 0
 		ret = append(ret, RawBounds{ChunkIdx: firstBlock,
 			OffsetStart: trueRangeStart,
-			OffsetEnd:   -1})
+			OffsetEnd:   oneBlockSize + hdrLen,
+			GlobalPos:   0})
+		cpos += oneBlockSize - trueRangeStart + hdrLen
 		for idx := firstBlock + 1; idx < lastBlock; idx++ {
 			ret = append(ret, RawBounds{ChunkIdx: idx,
 				OffsetStart: hdrLen,
-				OffsetEnd:   -1})
+				OffsetEnd:   oneBlockSize + hdrLen,
+				GlobalPos:   cpos})
+			cpos += oneBlockSize
 		}
 		ret = append(ret, RawBounds{ChunkIdx: lastBlock,
 			OffsetStart: hdrLen,
-			OffsetEnd:   trueRangeEnd})
+			OffsetEnd:   trueRangeEnd,
+			GlobalPos:   cpos})
 	}
 
 	return ret
