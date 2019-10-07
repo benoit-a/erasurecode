@@ -159,6 +159,59 @@ func (backend *Backend) Encode(data []byte) ([][]byte, error) {
 	return result, nil
 }
 
+type RawBounds struct {
+	ChunkIdx    int
+	OffsetStart int
+	OffsetEnd   int
+}
+
+func (backend *Backend) getHdrLen() int {
+	g := C.sizeof_fragment_header_t
+	return g
+}
+
+func (backend *Backend) GetRawBounds(trueLen, rangeStart, rangeEnd int) []RawBounds {
+	var alignedSize C.int
+
+	var cTrueLen C.ulong
+	cTrueLen = C.ulong(trueLen)
+
+	ret := []RawBounds{}
+
+	hdrLen := backend.getHdrLen()
+
+	alignedSize = C.liberasurecode_get_aligned_data_size(backend.libecDesc, cTrueLen)
+
+	oneBlockSize := (int)(alignedSize / C.int(backend.K))
+	firstBlock := rangeStart / oneBlockSize
+	lastBlock := rangeEnd / oneBlockSize
+
+	trueRangeStart := (rangeStart - firstBlock*oneBlockSize) + hdrLen
+	trueRangeEnd := (rangeEnd - lastBlock*oneBlockSize) + hdrLen
+
+	if firstBlock == lastBlock {
+		ret = append(ret, RawBounds{ChunkIdx: firstBlock,
+			OffsetStart: trueRangeStart,
+			OffsetEnd:   trueRangeEnd,
+		})
+	} else {
+		ret = append(ret, RawBounds{ChunkIdx: firstBlock,
+			OffsetStart: trueRangeStart,
+			OffsetEnd:   -1})
+		for idx := firstBlock + 1; idx < lastBlock; idx++ {
+			ret = append(ret, RawBounds{ChunkIdx: idx,
+				OffsetStart: hdrLen,
+				OffsetEnd:   -1})
+		}
+		ret = append(ret, RawBounds{ChunkIdx: lastBlock,
+			OffsetStart: hdrLen,
+			OffsetEnd:   trueRangeEnd})
+	}
+
+	return ret
+
+}
+
 func (backend *Backend) Decode(frags [][]byte) ([]byte, error) {
 	var data *C.char
 	var dataLength C.uint64_t

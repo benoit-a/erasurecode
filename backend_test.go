@@ -506,3 +506,36 @@ func TestAvailableBackends(t *testing.T) {
 	}
 	t.Logf("INFO: found %v/%v available backends", len(AvailableBackends()), len(KnownBackends))
 }
+
+func TestGetFragmentSize(t *testing.T) {
+
+	for _, name := range AvailableBackends() {
+		b := make([]byte, 4096)
+		for i := 0; i < 4096; i++ {
+			b[i] = (byte)('a' + (i)%26)
+		}
+		backend, err := InitBackend(Params{Name: name, K: 4, M: 2, W: 8, HD: 5})
+
+		if err != nil {
+			t.Logf("cannot init backend %+v", name)
+		} else {
+
+			vect, err := backend.Encode(b)
+			if err == nil {
+
+				rbound := backend.GetRawBounds(4094, 1022, 4000)
+				t.Logf("backend %+v", name)
+				for _, rb := range rbound {
+					t.Logf("info raw bound = %+v", rb)
+				}
+				firstByteExpected := (byte)('a' + 1022%26)
+				byteInVector := vect[rbound[0].ChunkIdx][rbound[0].OffsetStart]
+				if byteInVector != firstByteExpected {
+					t.Errorf("failure : expected to get byte %+v but get byte %+v", firstByteExpected, byteInVector)
+				}
+				t.Logf("end")
+			}
+			backend.Close()
+		}
+	}
+}
