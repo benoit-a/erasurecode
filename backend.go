@@ -159,11 +159,12 @@ func (backend *Backend) Encode(data []byte) ([][]byte, error) {
 	return result, nil
 }
 
+// RawBounds contains information about chunk/offset used on a get range
 type RawBounds struct {
-	ChunkIdx    int
-	OffsetStart int
-	OffsetEnd   int
-	GlobalPos   int
+	ChunkIdx       int // Chunk idx among the K chunks containing data
+	OffsetStart    int // Relative offset inside the chunk, where to start data read
+	OffsetEnd      int // Relative offset inside the chunk, where to stop data read
+	GlobalPosStart int // Global position of the data when data is concat
 }
 
 func (backend *Backend) getHdrLen() int {
@@ -174,8 +175,7 @@ func (backend *Backend) getHdrLen() int {
 func (backend *Backend) GetRawBounds(trueLen, rangeStart, rangeEnd int) []RawBounds {
 	var alignedSize C.int
 
-	var cTrueLen C.ulong
-	cTrueLen = C.ulong(trueLen)
+	cTrueLen := C.uint64_t(trueLen)
 
 	ret := []RawBounds{}
 
@@ -192,28 +192,30 @@ func (backend *Backend) GetRawBounds(trueLen, rangeStart, rangeEnd int) []RawBou
 
 	if firstBlock == lastBlock {
 		ret = append(ret, RawBounds{ChunkIdx: firstBlock,
-			OffsetStart: trueRangeStart,
-			OffsetEnd:   trueRangeEnd,
-			GlobalPos:   0,
+			OffsetStart:    trueRangeStart,
+			OffsetEnd:      trueRangeEnd,
+			GlobalPosStart: 0,
 		})
 	} else {
 		cpos := 0
 		ret = append(ret, RawBounds{ChunkIdx: firstBlock,
-			OffsetStart: trueRangeStart,
-			OffsetEnd:   oneBlockSize + hdrLen,
-			GlobalPos:   0})
+			OffsetStart:    trueRangeStart,
+			OffsetEnd:      oneBlockSize + hdrLen,
+			GlobalPosStart: 0,
+		})
 		cpos += oneBlockSize - trueRangeStart + hdrLen
 		for idx := firstBlock + 1; idx < lastBlock; idx++ {
 			ret = append(ret, RawBounds{ChunkIdx: idx,
-				OffsetStart: hdrLen,
-				OffsetEnd:   oneBlockSize + hdrLen,
-				GlobalPos:   cpos})
+				OffsetStart:    hdrLen,
+				OffsetEnd:      oneBlockSize + hdrLen,
+				GlobalPosStart: cpos,
+			})
 			cpos += oneBlockSize
 		}
 		ret = append(ret, RawBounds{ChunkIdx: lastBlock,
-			OffsetStart: hdrLen,
-			OffsetEnd:   trueRangeEnd,
-			GlobalPos:   cpos})
+			OffsetStart:    hdrLen,
+			OffsetEnd:      trueRangeEnd,
+			GlobalPosStart: cpos})
 	}
 
 	return ret
