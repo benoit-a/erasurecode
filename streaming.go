@@ -37,7 +37,7 @@ func getWriters(prefix string, n uint8, perm os.FileMode) ([]io.WriteCloser, err
 }
 
 func (shim ECWriter) Write(p []byte) (int, error) {
-	frags, err := shim.Backend.Encode(p)
+	frags, fin, err := shim.Backend.Encode(p)
 	if err != nil {
 		return 0, err
 	}
@@ -45,6 +45,7 @@ func (shim ECWriter) Write(p []byte) (int, error) {
 		// TODO: check for errors
 		writer.Write(frags[i])
 	}
+	fin()
 	return len(p), nil
 }
 

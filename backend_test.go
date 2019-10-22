@@ -143,7 +143,7 @@ func TestEncodeDecode(t *testing.T) {
 			continue
 		}
 		for patternIndex, pattern := range testPatterns {
-			frags, err := backend.Encode(pattern)
+			frags, fin, err := backend.Encode(pattern)
 			if err != nil {
 				t.Errorf("Error encoding %v: %q", params, err)
 				break
@@ -195,6 +195,7 @@ func TestEncodeDecode(t *testing.T) {
 			if !good {
 				break
 			}
+			fin()
 		}
 
 		if _, err := backend.Decode([][]byte{}); err == nil {
@@ -220,7 +221,7 @@ func TestReconstruct(t *testing.T) {
 			continue
 		}
 		for patternIndex, pattern := range testPatterns {
-			frags, err := backend.Encode(pattern)
+			frags, fin, err := backend.Encode(pattern)
 			if err != nil {
 				t.Errorf("Error encoding %v: %q", params, err)
 			}
@@ -243,6 +244,7 @@ func TestReconstruct(t *testing.T) {
 			if !good {
 				break
 			}
+			fin()
 		}
 
 		if _, err := backend.Reconstruct([][]byte{}, 0); err == nil {
@@ -268,7 +270,7 @@ func TestIsInvalidFragment(t *testing.T) {
 			continue
 		}
 		for patternIndex, pattern := range testPatterns {
-			frags, err := backend.Encode(pattern)
+			frags, _, err := backend.Encode(pattern)
 			if err != nil {
 				t.Errorf("Error encoding %v: %q", params, err)
 				continue
@@ -430,7 +432,7 @@ func TestGC(t *testing.T) {
 		}{
 			"Reconstruct",
 			func() {
-				vect, err := backend.Encode(input)
+				vect, _, err := backend.Encode(input)
 
 				if err != nil {
 					t.Fatal("cannot encode data")
@@ -457,7 +459,7 @@ func TestGC(t *testing.T) {
 		}{
 			"Decode",
 			func() {
-				vect, err := backend.Encode(input)
+				vect, _, err := backend.Encode(input)
 
 				if err != nil {
 					t.Fatal("cannot encode data")
@@ -505,4 +507,19 @@ func TestAvailableBackends(t *testing.T) {
 		_ = backend.Close()
 	}
 	t.Logf("INFO: found %v/%v available backends", len(AvailableBackends()), len(KnownBackends))
+}
+
+func BenchmarkEncode(b *testing.B) {
+	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 5, M: 1, W: 8, HD: 5})
+
+	buf := bytes.Repeat([]byte("A"), 1024*1024)
+
+	for i := 0; i < b.N; i++ {
+		_, fin, err := backend.Encode(buf)
+
+		if err != nil {
+			b.Fatal(err)
+		}
+		fin()
+	}
 }
