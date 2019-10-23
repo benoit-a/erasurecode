@@ -5,6 +5,7 @@ package erasurecode
 #include <stdlib.h>
 #include <liberasurecode/erasurecode.h>
 #include <liberasurecode/erasurecode_helpers_ext.h>
+#include <liberasurecode/erasurecode_postprocessing.h>
 // shims to make working with frag arrays easier
 char ** makeStrArray(int n) { return calloc(n, sizeof (char *)); }
 void freeStrArray(char ** arr) { free(arr); }
@@ -15,6 +16,105 @@ uint64_t getOrigDataSize(struct fragment_header_s *header) { return header->meta
 uint32_t getBackendVersion(struct fragment_header_s *header) { return header->meta.backend_version; }
 ec_backend_id_t getBackendID(struct fragment_header_s *header) { return header->meta.backend_id; }
 uint32_t getECVersion(struct fragment_header_s *header) { return header->libec_version; }
+
+struct encode_chunk_context {
+  ec_backend_t instance;
+  char **datas;
+  char **codings;
+  unsigned int number_of_chunks;
+  unsigned int chunk_size;
+  int blocksize;
+  int k;
+  int m;
+};
+
+void encode_chunk_prepare(int desc,
+                          char *data,
+                          int datalen,
+                          int piecesize,
+                          struct encode_chunk_context *ctx)
+{
+  ctx->instance = liberasurecode_backend_instance_get_by_desc(desc);
+  int aligneddatalen = liberasurecode_get_aligned_data_size(desc, datalen);
+  int i;
+  const int k = ctx->instance->args.uargs.k;
+  const int m = ctx->instance->args.uargs.m;
+
+  int blocksize = aligneddatalen / k;
+
+  ctx->blocksize = blocksize;
+
+  ctx->number_of_chunks = blocksize / piecesize;
+  if (ctx->number_of_chunks * piecesize != blocksize) {
+    ctx->number_of_chunks++;
+  }
+  ctx->chunk_size = piecesize;
+
+  ctx->k = ctx->instance->args.uargs.k;
+  ctx->m = ctx->instance->args.uargs.m;
+
+  ctx->datas   = calloc(ctx->k, sizeof(char*));
+  ctx->codings = calloc(ctx->m, sizeof(char*));
+
+  for (i = 0; i < ctx->k; ++i) {
+    ctx->datas[i] = malloc(blocksize + ctx->number_of_chunks * sizeof(fragment_header_t));
+  }
+
+  for (i = 0; i < ctx->m; ++i) {
+    ctx->codings[i] = malloc(blocksize + ctx->number_of_chunks * sizeof(fragment_header_t));
+  }
+}
+
+int encode_chunk(int desc, char *data, int datalen, struct encode_chunk_context *ctx, int nth)
+{
+  ec_backend_t ec = ctx->instance;
+  char *k_ref[ctx->k];
+  char *m_ref[ctx->m];
+  int len_to_copy = ctx->chunk_size;
+  int one_cell_size = sizeof(fragment_header_t) + ctx->chunk_size;
+  int i, ret;
+
+  if (nth >= ctx->number_of_chunks) {
+    return -1;
+  }
+
+  if (len_to_copy > datalen - ((ctx->k - 1) * ctx->blocksize + nth * len_to_copy) ) {
+    len_to_copy = datalen - ((ctx->k - 1) * ctx->blocksize + nth * len_to_copy);
+  }
+
+
+  for (i = 0; i < ctx->k; i++) {
+    char *ptr = &ctx->datas[i][nth * one_cell_size];
+    fragment_header_t *hdr = (fragment_header_t*)ptr;
+    hdr->magic = LIBERASURECODE_FRAG_HEADER_MAGIC;
+    ptr = (char*) (hdr + 1);
+    memcpy(ptr, data + (i * ctx->blocksize + nth * ctx->chunk_size), len_to_copy);
+    k_ref[i] = ptr;
+  }
+
+  for (i = 0; i < ctx->m; i++) {
+    char *ptr = &ctx->codings[i][nth * one_cell_size];
+    fragment_header_t *hdr = (fragment_header_t*)ptr;
+    hdr->magic = LIBERASURECODE_FRAG_HEADER_MAGIC;
+    ptr = (char*) (hdr + 1);
+    m_ref[i] = ptr;
+  }
+
+  ret = ec->common.ops->encode(ec->desc.backend_desc, k_ref, m_ref, len_to_copy);
+  if (ret < 0) {
+      fprintf(stderr, "error encode ret = %d\n", ret);
+      return -1;
+  } else {
+    ret = finalize_fragments_after_encode(ec, ctx->k, ctx->m, ctx->chunk_size, len_to_copy, k_ref, m_ref);
+    if (ret < 0) {
+      fprintf(stderr, "error encode ret = %d\n", ret);
+      return -1;
+    }
+  }
+  return 0;
+}
+
+
 */
 import "C"
 
