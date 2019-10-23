@@ -59,11 +59,11 @@ void encode_chunk_prepare(int desc,
   ctx->frags_len = blocksize + ctx->number_of_chunks * sizeof(fragment_header_t);
 
   for (i = 0; i < ctx->k; ++i) {
-    ctx->datas[i] = malloc(ctx->frags_len);
+    ctx->datas[i] = get_aligned_buffer16(ctx->frags_len);
   }
 
   for (i = 0; i < ctx->m; ++i) {
-    ctx->codings[i] = malloc(ctx->frags_len);
+    ctx->codings[i] = get_aligned_buffer16(ctx->frags_len);
   }
 }
 
@@ -259,6 +259,7 @@ func (backend *Backend) EncodeM(data []byte, chunkSize int) ([][]byte, func(), e
 	fragLen := ctx.frags_len
 	for i := 0; i < backend.K; i++ {
 		result[i] = (*[1 << 30]byte)(unsafe.Pointer(C.getStrArrayItem(ctx.datas, C.int(i))))[:int(C.int(fragLen)):int(C.int(fragLen))]
+
 	}
 	for i := 0; i < backend.M; i++ {
 		result[i+backend.K] = (*[1 << 30]byte)(unsafe.Pointer(C.getStrArrayItem(ctx.codings, C.int(i))))[:int(C.int(fragLen)):int(C.int(fragLen))]
