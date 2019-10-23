@@ -153,7 +153,7 @@ func (backend *Backend) Encode(data []byte) ([][]byte, func(), error) {
 		result[i] = (*[1 << 30]byte)(unsafe.Pointer(C.getStrArrayItem(dataFrags, C.int(i))))[:int(C.int(fragLength)):int(C.int(fragLength))]
 	}
 	for i := 0; i < backend.M; i++ {
-		result[i+backend.K] = C.GoBytes(C.getStrArrayItem(parityFrags, C.int(i)), C.int(fragLength))
+		result[i+backend.K] = (*[1 << 30]byte)(unsafe.Pointer(C.getStrArrayItem(parityFrags, C.int(i))))[:int(C.int(fragLength)):int(C.int(fragLength))]
 	}
 	return result, func() {
 		C.liberasurecode_encode_cleanup(
