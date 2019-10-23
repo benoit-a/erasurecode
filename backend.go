@@ -23,6 +23,7 @@ struct encode_chunk_context {
   char **codings;
   unsigned int number_of_chunks;
   unsigned int chunk_size;
+  unsigned int frags_len;
   int blocksize;
   int k;
   int m;
@@ -53,15 +54,16 @@ void encode_chunk_prepare(int desc,
   ctx->k = ctx->instance->args.uargs.k;
   ctx->m = ctx->instance->args.uargs.m;
 
-  ctx->datas   = calloc(ctx->k, sizeof(char*));
-  ctx->codings = calloc(ctx->m, sizeof(char*));
+  ctx->datas     = calloc(ctx->k, sizeof(char*));
+  ctx->codings   = calloc(ctx->m, sizeof(char*));
+  ctx->frags_len = blocksize + ctx->number_of_chunks * sizeof(fragment_header_t);
 
   for (i = 0; i < ctx->k; ++i) {
-    ctx->datas[i] = malloc(blocksize + ctx->number_of_chunks * sizeof(fragment_header_t));
+    ctx->datas[i] = malloc(ctx->frags_len);
   }
 
   for (i = 0; i < ctx->m; ++i) {
-    ctx->codings[i] = malloc(blocksize + ctx->number_of_chunks * sizeof(fragment_header_t));
+    ctx->codings[i] = malloc(ctx->frags_len);
   }
 }
 
@@ -235,6 +237,37 @@ func (backend *Backend) Close() error {
 	}
 	backend.libecDesc = 0
 	return nil
+}
+
+func (backend *Backend) EncodeM(data []byte, chunkSize int) ([][]byte, func(), error) {
+
+	var ctx C.struct_encode_chunk_context
+	pData := (*C.char)(unsafe.Pointer(&data[0]))
+	pDataLen := C.int(len(data))
+	cChunkSize := C.int(chunkSize)
+
+	C.encode_chunk_prepare(backend.libecDesc, pData, pDataLen, cChunkSize, &ctx)
+	// TODO, use goroutines here
+	for i := 0; i < int(ctx.number_of_chunks); i++ {
+
+		r := C.encode_chunk(backend.libecDesc, pData, pDataLen, &ctx, C.int(i))
+		if r < 0 {
+			return nil, nil, fmt.Errorf("cannot encode chunk number %d", i)
+		}
+	}
+	result := make([][]byte, backend.K+backend.M)
+	fragLen := ctx.frags_len
+	for i := 0; i < backend.K; i++ {
+		result[i] = (*[1 << 30]byte)(unsafe.Pointer(C.getStrArrayItem(ctx.datas, C.int(i))))[:int(C.int(fragLen)):int(C.int(fragLen))]
+	}
+	for i := 0; i < backend.M; i++ {
+		result[i+backend.K] = (*[1 << 30]byte)(unsafe.Pointer(C.getStrArrayItem(ctx.codings, C.int(i))))[:int(C.int(fragLen)):int(C.int(fragLen))]
+	}
+	return result, func() {
+		C.liberasurecode_encode_cleanup(
+			backend.libecDesc, ctx.datas, ctx.codings)
+	}, nil
+
 }
 
 func (backend *Backend) Encode(data []byte) ([][]byte, func(), error) {

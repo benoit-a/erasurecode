@@ -523,3 +523,17 @@ func BenchmarkEncode(b *testing.B) {
 		fin()
 	}
 }
+
+func BenchmarkEncodeM(b *testing.B) {
+	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 5, M: 1, W: 8, HD: 5})
+
+	buf := bytes.Repeat([]byte("A"), 4096*1024)
+	_, fin, err := backend.EncodeM(buf, 4096)
+
+	if err != nil {
+		b.Fatal(err)
+	}
+	if fin != nil {
+		fin()
+	}
+}
