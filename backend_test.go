@@ -510,11 +510,11 @@ func TestAvailableBackends(t *testing.T) {
 }
 
 func BenchmarkEncode(b *testing.B) {
-	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 5, M: 1, W: 8, HD: 5})
+	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 4, M: 1, W: 8, HD: 5})
 
 	buf := bytes.Repeat([]byte("A"), 1024*1024)
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; i < 60; i++ {
 		_, fin, err := backend.Encode(buf)
 
 		if err != nil {
@@ -525,14 +525,87 @@ func BenchmarkEncode(b *testing.B) {
 }
 
 func BenchmarkEncodeM(b *testing.B) {
-	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 5, M: 1, W: 8, HD: 5})
+	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 4, M: 1, W: 8, HD: 5})
 
-	buf := bytes.Repeat([]byte("A"), 4096*1024)
-	_, fin, err := backend.EncodeM(buf, 4096)
+	buf := make([]byte, 1024*1024)
+	for i := 0; i < len(buf); i++ {
+		buf[i] = byte(65 + i%26)
+	}
+	for i := 0; i < 60; i++ {
+		_, fin, err := backend.EncodeM(buf, 4096)
+
+		if err != nil {
+			b.Fatal(err)
+		}
+		if fin != nil {
+			fin()
+		}
+	}
+}
+
+func TestEncodeM(t *testing.T) {
+	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 4, M: 1, W: 8, HD: 5})
+	buf := make([]byte, 1024*1024)
+	for i := 0; i < len(buf); i++ {
+		buf[i] = byte(65 + i%26)
+	}
+	result, fin, err := backend.EncodeM(buf, 4096)
 
 	if err != nil {
-		b.Fatal(err)
+		t.Errorf("failed to encode %+v", err)
 	}
+
+	/* now we will decode the first 80000bytes */
+	getRange := 80000
+	blockSize := (4096 + 80) * backend.K
+	blockNr := getRange / blockSize
+	if blockNr*blockSize != getRange {
+		blockNr++
+	}
+	data := make([]byte, 0)
+
+	cellSize := 4096 + 80
+	// this is what we should get from our request
+	//containerD0 := result[0][0 : blockNr*cellSize]
+	containerD1 := result[1][0 : blockNr*cellSize]
+	containerD2 := result[2][0 : blockNr*cellSize]
+	containerD3 := result[3][0 : blockNr*cellSize]
+
+	containerC0 := result[4][0 : blockNr*cellSize]
+
+	for i := 0; i < blockNr; i++ {
+		var vect [][]byte
+		//subContainerD0 := containerD0[i*cellSize : cellSize]
+		subContainerD1 := containerD1[i*cellSize : (i+1)*cellSize]
+		subContainerD2 := containerD2[i*cellSize : (i+1)*cellSize]
+		subContainerD3 := containerD3[i*cellSize : (i+1)*cellSize]
+		subContainerC0 := containerC0[i*cellSize : (i+1)*cellSize]
+		// we simulate the loss of datapart 1
+		//vect = append(vect, subContainerD0)
+		vect = append(vect, subContainerD1)
+		vect = append(vect, subContainerD2)
+		vect = append(vect, subContainerD3)
+		vect = append(vect, subContainerC0)
+
+		subdata, err := backend.Decode(vect)
+		if err != nil {
+			t.Errorf("error subdecoding %d cause=%v", i, err)
+		}
+		data = append(data, subdata...)
+		data = append(data, subContainerD1[80:]...)
+		data = append(data, subContainerD2[80:]...)
+		data = append(data, subContainerD3[80:]...)
+	}
+	for i := 0; i < len(data)-1; i++ {
+		if data[i] != 'Z' {
+			if data[i] != data[i+1]-1 {
+				t.Errorf("bad reconstruction at offset %d", i)
+			}
+		} else if data[i+1] != 'A' {
+			t.Errorf("bad reconstruction at offset %d", i)
+		}
+	}
+
 	if fin != nil {
 		fin()
 	}

@@ -16,15 +16,16 @@ uint64_t getOrigDataSize(struct fragment_header_s *header) { return header->meta
 uint32_t getBackendVersion(struct fragment_header_s *header) { return header->meta.backend_version; }
 ec_backend_id_t getBackendID(struct fragment_header_s *header) { return header->meta.backend_id; }
 uint32_t getECVersion(struct fragment_header_s *header) { return header->libec_version; }
+int getHeaderSize() { return sizeof(struct fragment_header_s); }
 
 struct encode_chunk_context {
-  ec_backend_t instance;
-  char **datas;
-  char **codings;
-  unsigned int number_of_chunks;
-  unsigned int chunk_size;
-  unsigned int frags_len;
-  int blocksize;
+  ec_backend_t instance; // backend instance
+  char **datas;			 // the K datas
+  char **codings;        // the M codings
+  unsigned int number_of_subgroup; // number of subchunk in each K part
+  unsigned int chunk_size;       // datasize of each subchunk
+  unsigned int frags_len; // allocating size of each K+M objects
+  int blocksize;          // k-bounds of data
   int k;
   int m;
 };
@@ -36,27 +37,24 @@ void encode_chunk_prepare(int desc,
                           struct encode_chunk_context *ctx)
 {
   ctx->instance = liberasurecode_backend_instance_get_by_desc(desc);
-  int aligneddatalen = liberasurecode_get_aligned_data_size(desc, datalen);
   int i;
   const int k = ctx->instance->args.uargs.k;
   const int m = ctx->instance->args.uargs.m;
 
-  int blocksize = aligneddatalen / k;
-
-  ctx->blocksize = blocksize;
-
-  ctx->number_of_chunks = blocksize / piecesize;
-  if (ctx->number_of_chunks * piecesize != blocksize) {
-    ctx->number_of_chunks++;
+  int block_size = piecesize * k;
+  ctx->number_of_subgroup = datalen / block_size;
+  if(ctx->number_of_subgroup * block_size != datalen) {
+	ctx->number_of_subgroup++;
   }
+
   ctx->chunk_size = piecesize;
 
-  ctx->k = ctx->instance->args.uargs.k;
-  ctx->m = ctx->instance->args.uargs.m;
+  ctx->k = k;
+  ctx->m = m;
 
   ctx->datas     = calloc(ctx->k, sizeof(char*));
   ctx->codings   = calloc(ctx->m, sizeof(char*));
-  ctx->frags_len = blocksize + ctx->number_of_chunks * sizeof(fragment_header_t);
+  ctx->frags_len = (sizeof(fragment_header_t) + piecesize) * ctx->number_of_subgroup;
 
   for (i = 0; i < ctx->k; ++i) {
     ctx->datas[i] = get_aligned_buffer16(ctx->frags_len);
@@ -65,6 +63,7 @@ void encode_chunk_prepare(int desc,
   for (i = 0; i < ctx->m; ++i) {
     ctx->codings[i] = get_aligned_buffer16(ctx->frags_len);
   }
+
 }
 
 int encode_chunk(int desc, char *data, int datalen, struct encode_chunk_context *ctx, int nth)
@@ -72,16 +71,13 @@ int encode_chunk(int desc, char *data, int datalen, struct encode_chunk_context 
   ec_backend_t ec = ctx->instance;
   char *k_ref[ctx->k];
   char *m_ref[ctx->m];
-  int len_to_copy = ctx->chunk_size;
+
   int one_cell_size = sizeof(fragment_header_t) + ctx->chunk_size;
   int i, ret;
-
-  if (nth >= ctx->number_of_chunks) {
+  char const *const dataend = data + datalen;
+  char *dataoffset = data + (ctx->k * nth) * ctx->chunk_size;
+  if (nth >= ctx->number_of_subgroup) {
     return -1;
-  }
-
-  if (len_to_copy > datalen - ((ctx->k - 1) * ctx->blocksize + nth * len_to_copy) ) {
-    len_to_copy = datalen - ((ctx->k - 1) * ctx->blocksize + nth * len_to_copy);
   }
 
 
@@ -89,8 +85,15 @@ int encode_chunk(int desc, char *data, int datalen, struct encode_chunk_context 
     char *ptr = &ctx->datas[i][nth * one_cell_size];
     fragment_header_t *hdr = (fragment_header_t*)ptr;
     hdr->magic = LIBERASURECODE_FRAG_HEADER_MAGIC;
-    ptr = (char*) (hdr + 1);
-    memcpy(ptr, data + (i * ctx->blocksize + nth * ctx->chunk_size), len_to_copy);
+	ptr = (char*) (hdr + 1);
+	if(dataoffset < dataend) {
+	  int len_to_copy = ctx->chunk_size;
+	  if (len_to_copy > dataend - dataoffset) {
+		  len_to_copy = dataend - dataoffset;
+	  }
+	  memcpy(ptr, dataoffset, len_to_copy);
+	}
+	dataoffset += ctx->chunk_size;
     k_ref[i] = ptr;
   }
 
@@ -102,12 +105,12 @@ int encode_chunk(int desc, char *data, int datalen, struct encode_chunk_context 
     m_ref[i] = ptr;
   }
 
-  ret = ec->common.ops->encode(ec->desc.backend_desc, k_ref, m_ref, len_to_copy);
+  ret = ec->common.ops->encode(ec->desc.backend_desc, k_ref, m_ref, ctx->chunk_size);
   if (ret < 0) {
       fprintf(stderr, "error encode ret = %d\n", ret);
       return -1;
   } else {
-    ret = finalize_fragments_after_encode(ec, ctx->k, ctx->m, ctx->chunk_size, len_to_copy, k_ref, m_ref);
+    ret = finalize_fragments_after_encode(ec, ctx->k, ctx->m, ctx->chunk_size, ctx->chunk_size, k_ref, m_ref);
     if (ret < 0) {
       fprintf(stderr, "error encode ret = %d\n", ret);
       return -1;
@@ -126,6 +129,8 @@ import (
 	"fmt"
 	"runtime"
 	"unsafe"
+	"sync"
+	"sync/atomic"
 )
 
 type Version struct {
@@ -239,21 +244,35 @@ func (backend *Backend) Close() error {
 	return nil
 }
 
-func (backend *Backend) EncodeM(data []byte, chunkSize int) ([][]byte, func(), error) {
 
+
+func (backend *Backend) EncodeM(data []byte, chunkSize int) ([][]byte, func(), error) {
+	var wg sync.WaitGroup
 	var ctx C.struct_encode_chunk_context
 	pData := (*C.char)(unsafe.Pointer(&data[0]))
 	pDataLen := C.int(len(data))
 	cChunkSize := C.int(chunkSize)
 
 	C.encode_chunk_prepare(backend.libecDesc, pData, pDataLen, cChunkSize, &ctx)
-	// TODO, use goroutines here
-	for i := 0; i < int(ctx.number_of_chunks); i++ {
 
-		r := C.encode_chunk(backend.libecDesc, pData, pDataLen, &ctx, C.int(i))
-		if r < 0 {
-			return nil, nil, fmt.Errorf("cannot encode chunk number %d", i)
-		}
+	wg.Add(int(ctx.number_of_subgroup))
+	var errCounter uint64
+	for i := 0; i < int(ctx.number_of_subgroup); i++ {
+		go func(nth int) {
+			defer wg.Done()
+			r := C.encode_chunk(backend.libecDesc, pData, pDataLen, &ctx, C.int(nth))
+			if r < 0 {
+				atomic.AddUint64(&errCounter, 1)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if errCounter != 0 {
+		return nil, func() {
+			C.liberasurecode_encode_cleanup(
+				backend.libecDesc, ctx.datas, ctx.codings) }, 
+			fmt.Errorf("error encoding chunk (%+v encoding failed)", errCounter)
 	}
 	result := make([][]byte, backend.K+backend.M)
 	fragLen := ctx.frags_len
@@ -264,6 +283,8 @@ func (backend *Backend) EncodeM(data []byte, chunkSize int) ([][]byte, func(), e
 	for i := 0; i < backend.M; i++ {
 		result[i+backend.K] = (*[1 << 30]byte)(unsafe.Pointer(C.getStrArrayItem(ctx.codings, C.int(i))))[:int(C.int(fragLen)):int(C.int(fragLen))]
 	}
+
+
 	return result, func() {
 		C.liberasurecode_encode_cleanup(
 			backend.libecDesc, ctx.datas, ctx.codings)
