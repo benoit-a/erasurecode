@@ -358,7 +358,21 @@ func BackendIsAvailable(name string) bool {
 }
 
 // InitBackend returns a backend descriptor according params provided
+func InitBackendNo(params Params) (Backend, error) {
+	return initBackend(params, C.CHKSUM_NONE)
+}
+
+// InitBackend returns a backend descriptor according params provided
 func InitBackend(params Params) (Backend, error) {
+	return initBackend(params, C.CHKSUM_CRC32)
+}
+
+func InitBackendXH(params Params) (Backend, error) {
+	return initBackend(params, C.CHKSUM_XXHASH)
+}
+
+
+func initBackend(params Params, crc int) (Backend, error) {
 	backend := Backend{params, 0, int(C.getHeaderSize()), nil}
 	id, err := nameToID(backend.Name)
 	if err != nil {
@@ -369,7 +383,7 @@ func InitBackend(params Params) (Backend, error) {
 		m:  C.int(backend.M),
 		w:  C.int(backend.W),
 		hd: C.int(backend.HD),
-		ct: C.CHKSUM_CRC32,
+		ct: C.ec_checksum_type_t(crc),
 	})
 	if desc < 0 {
 		return backend, fmt.Errorf("instance_create() returned %v", errToName(-desc))

@@ -557,12 +557,13 @@ func (d decodeTest) String() string {
 }
 
 var decodeTests = []decodeTest{
+	{100 * 1000, Params{Name: "isa_l_rs_vand", K: 2, M: 1}},
 	{1024 * 1024, Params{Name: "isa_l_rs_vand", K: 4, M: 2, W: 8, HD: 5}},
 	{5 * 100000, Params{Name: "isa_l_rs_vand", K: 5, M: 7}},
-	// Will force an allocation of a new (dedicated) pool
-	{10000000, Params{Name: "isa_l_rs_vand", K: 2, M: 1, MaxBlockSize: 10000000 + maxBuffer}},
-	// Will force an allocation at every encoding (but should work)
-	{maxBuffer * 2, Params{Name: "isa_l_rs_vand", K: 2, M: 1, MaxBlockSize: maxBuffer / 2}},
+	// 	// Will force an allocation of a new (dedicated) pool
+	// 	{10000000, Params{Name: "isa_l_rs_vand", K: 2, M: 1, MaxBlockSize: 10000000 + maxBuffer}},
+	// 	// Will force an allocation at every encoding (but should work)
+	// 	{maxBuffer * 2, Params{Name: "isa_l_rs_vand", K: 2, M: 1, MaxBlockSize: maxBuffer / 2}},
 }
 
 func BenchmarkDecodeM(b *testing.B) {
@@ -722,20 +723,73 @@ func BenchmarkDecodeMSlow(b *testing.B) {
 }
 
 func BenchmarkEncodeM(b *testing.B) {
-	backend, _ := InitBackend(Params{Name: "isa_l_rs_vand", K: 4, M: 2, W: 8, HD: 5})
+	bufSize := 327680
+	for _, dtest := range decodeTests {
+		b.Run(fmt.Sprintf("%s:%d+%d,size=%d", dtest.p.Name, dtest.p.K, dtest.p.M, dtest.size),
+			func(b *testing.B) {
+				for _, crc := range []int{1, 2, 3} {
+					var crcName string
+					switch crc {
+					case 1:
+						crcName = "none"
+					case 2:
+						crcName = "crc32"
+					case 3:
+						crcName = "xxh64"
+					}
+					b.Run(fmt.Sprintf("crc=%v", crcName),
+						func(b *testing.B) {
+							var backend Backend
+							switch crc {
+							case 1: // NOTHIN
+								backend, _ = InitBackendNo(dtest.p)
+							case 2:
+								backend, _ = InitBackend(dtest.p)
+							case 3:
+								backend, _ = InitBackendXH(dtest.p)
 
-	buf := bytes.Repeat([]byte("A"), 1024*1024)
+							}
+							buf := bytes.Repeat([]byte("Abcde"), dtest.size/5)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		encoded, err := backend.EncodeMatrix(buf, 32768)
-
-		if err != nil {
-			b.Fatal(err)
-		}
-		encoded.Free()
+							b.Run("Encode", func(b *testing.B) {
+								b.ResetTimer()
+								for i := 0; i < b.N; i++ {
+									encoded, err := backend.EncodeMatrix(buf, bufSize)
+									if err != nil {
+										b.Fatal(err)
+									}
+									encoded.Free()
+								}
+							})
+							b.Run("Decode", func(b *testing.B) {
+								encoded, _ := backend.EncodeMatrix(buf, bufSize)
+								defer encoded.Free()
+								b.ResetTimer()
+								for i := 0; i < b.N; i++ {
+									decoded, err := backend.DecodeMatrix(encoded.Data, bufSize)
+									if err != nil {
+										b.Fatal(err)
+									}
+									decoded.Free()
+								}
+							})
+							b.Run("Reconstruct", func(b *testing.B) {
+								encoded, _ := backend.EncodeMatrix(buf, bufSize)
+								defer encoded.Free()
+								b.ResetTimer()
+								for i := 0; i < b.N; i++ {
+									decoded, err := backend.ReconstructMatrix(encoded.Data[1:], 0, bufSize)
+									if err != nil {
+										b.Fatal(err)
+									}
+									decoded.Free()
+								}
+							})
+							backend.Close()
+						})
+				}
+			})
 	}
-	backend.Close()
 }
 
 func BenchmarkDecode(b *testing.B) {
