@@ -11,10 +11,10 @@ linters:
     - unparam
     - unused
 # To be activated
-#    - gosimple
-#    - govet
-#    - stylecheck
-#    - unconvert
-#    - errcheck
+    - gosimple
+    - govet
+    - stylecheck
+    - unconvert
+    - errcheck
   enable-all: false
   fast: false
