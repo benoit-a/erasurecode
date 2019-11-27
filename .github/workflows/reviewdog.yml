@@ -1,12 +1,10 @@
----
-name: Go
-on: [push]
+name: reviewdog
+on: [pull_request]
 jobs:
-  build:
-    name: Build
+  golangci-lint:
+    name: runner / golangci-lint
     runs-on: ubuntu-latest
     steps:
-
     - name: Set up Go 1.13
       uses: actions/setup-go@v1
       with:
@@ -20,7 +18,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get -y install yasm
-
+  
     - name: Build isa-l
       run: |
         git clone --depth 1 --branch v2.28.0 https://github.com/intel/isa-l.git
@@ -30,7 +28,7 @@ jobs:
         make
         sudo make install
         sudo ldconfig
-
+  
     - name: Build liberasurecode
       run: |
         git clone https://github.com/openstack/liberasurecode.git
@@ -49,8 +47,16 @@ jobs:
             dep ensure
         fi
 
-    - name: Test
-      run: go test -v .
+    - name: Setup reviewdog & golangci
+      run: |
+        mkdir -p $HOME/bin && curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh| sh -s -- -b $HOME/bin
+        echo ::add-path::$HOME/bin
+        wget -q -O - https://github.com/golangci/golangci-lint/releases/download/v1.21.0/golangci-lint-1.21.0-linux-amd64.tar.gz | \
+        sudo tar xvz -C /usr/bin --strip-components=1 -f -
 
-    - name: Build
-      run: go build -v .
+    - name: Run reviewdog
+      env:
+        REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        golangci-lint run --out-format line-number ./... | reviewdog -f=golangci-lint -name="golangci" -reporter=github-pr-check -level="error"
+
