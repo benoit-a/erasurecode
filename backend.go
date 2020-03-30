@@ -1,6 +1,7 @@
 package erasurecode
 
 /*
+#cgo CFLAGS: -fno-omit-frame-pointer
 #cgo pkg-config: erasurecode-1
 #include <stdlib.h>
 #include <liberasurecode/erasurecode.h>
@@ -370,7 +371,6 @@ func InitBackend(params Params) (Backend, error) {
 func InitBackendXH(params Params) (Backend, error) {
 	return initBackend(params, C.CHKSUM_XXHASH)
 }
-
 
 func initBackend(params Params, crc int) (Backend, error) {
 	backend := Backend{params, 0, int(C.getHeaderSize()), nil}
@@ -782,14 +782,13 @@ func (backend *Backend) ReconstructMatrix(frags [][]byte, fragIndex int, chunksi
 	dlen := blockNr * blockSize
 	dataB, data := backend.pool.New(dlen)
 
-
 	cellSize := chunksize + backend.headerSize
 
 	var errCounter uint32
 	// TODO use goroutines here to leverage multicore computation
 	wg.Add(blockNr)
 	for i := 0; i < blockNr; i++ {
-		go func (blocknr int) {
+		go func(blocknr int) {
 			vect := make([][]byte, len(frags))
 			for j := 0; j < len(frags); j++ {
 				vect[j] = frags[j][blocknr*cellSize : (blocknr+1)*cellSize]
